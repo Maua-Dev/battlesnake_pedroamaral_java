@@ -6,6 +6,8 @@ import com.mauadev.code.entities.GameState;
 import com.mauadev.code.entities.Snake;
 
 import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -23,6 +25,9 @@ public class Logic {
     /** Abaixo dessa vida a cobra passa a ir atrás da comida mais próxima. */
     private static final int HUNGRY = 40;
 
+    /** Tamanho padrão do tabuleiro quando o JSON não informa largura/altura. */
+    private static final int DEFAULT_SIZE = 11;
+
     /** GET / - aparência da cobra. */
     public static Map<String, String> info() {
         Map<String, String> info = new HashMap<>();
@@ -34,7 +39,6 @@ public class Logic {
         info.put("version", "6.0.0-java");
         return info;
     }
-
     /** POST /start - uma vez por partida. */
     public static void start(GameState state) {
     }
@@ -48,16 +52,16 @@ public class Logic {
         try {
             return choose(state);
         } catch (RuntimeException e) {
-            return "up";
+            return fallback(state);
         }
     }
 
     private static String choose(GameState state) {
         Board board = state.getBoard();
-        int w = board.getWidth();
-        int h = board.getHeight();
+        int w = board.getWidth() > 0 ? board.getWidth() : DEFAULT_SIZE;
+        int h = board.getHeight() > 0 ? board.getHeight() : DEFAULT_SIZE;
         Snake me = state.getYou();
-        List<Coordinate> myBody = me.getBody();
+        List<Coordinate> myBody = bodyOf(me);
         Coordinate head = myBody.get(0);
         int myLength = myBody.size();
 
@@ -65,13 +69,20 @@ public class Logic {
         boolean[] danger = new boolean[w * h];
         boolean[] food = new boolean[w * h];
 
-        for (Coordinate f : board.getFood()) {
-            food[f.getY() * w + f.getX()] = true;
+        if (board.getFood() != null) {
+            for (Coordinate f : board.getFood()) {
+                if (f != null && inside(f.getX(), f.getY(), w, h)) {
+                    food[f.getY() * w + f.getX()] = true;
+                }
+            }
         }
 
-        for (Snake s : board.getSnakes()) {
-            List<Coordinate> body = s.getBody();
+        for (Snake s : allSnakes(state)) {
+            List<Coordinate> body = bodyOf(s);
             int n = body.size();
+            if (n == 0) {
+                continue;
+            }
             // a cauda libera a casa no turno seguinte, a não ser que a cobra tenha acabado de comer
             boolean tailMoves = n > 1 && !sameCell(body.get(n - 1), body.get(n - 2));
             for (int i = 0; i < n; i++) {
@@ -79,9 +90,11 @@ public class Logic {
                     continue;
                 }
                 Coordinate c = body.get(i);
-                blocked[c.getY() * w + c.getX()] = true;
+                if (inside(c.getX(), c.getY(), w, h)) {
+                    blocked[c.getY() * w + c.getX()] = true;
+                }
             }
-            if (!s.getId().equals(me.getId()) && n >= myLength) {
+            if (!isMe(s, me) && n >= myLength) {
                 Coordinate eh = body.get(0);
                 for (int d = 0; d < 4; d++) {
                     int x = eh.getX() + DX[d];
@@ -126,7 +139,91 @@ public class Logic {
             }
         }
 
-        return bestMove < 0 ? "up" : MOVES[bestMove];
+        return bestMove < 0 ? fallback(state) : MOVES[bestMove];
+    }
+
+    /** Jogada de emergência: só olha paredes e o próprio corpo. */
+    private static String fallback(GameState state) {
+        try {
+            Board board = state.getBoard();
+            int w = board != null && board.getWidth() > 0 ? board.getWidth() : DEFAULT_SIZE;
+            int h = board != null && board.getHeight() > 0 ? board.getHeight() : DEFAULT_SIZE;
+            List<Coordinate> body = bodyOf(state.getYou());
+            Coordinate head = body.get(0);
+            for (int d = 0; d < 4; d++) {
+                int x = head.getX() + DX[d];
+                int y = head.getY() + DY[d];
+                if (!inside(x, y, w, h)) {
+                    continue;
+                }
+                boolean onBody = false;
+                for (int i = 0; i < body.size() - 1; i++) {
+                    if (body.get(i).getX() == x && body.get(i).getY() == y) {
+                        onBody = true;
+                    }
+                }
+                if (!onBody) {
+                    return MOVES[d];
+                }
+            }
+        } catch (RuntimeException e) {
+            // sem dados suficientes: cai no valor padrão
+        }
+        return "up";
+    }
+
+    /** Corpo da cobra; se vier vazio usa só a cabeça. Nunca devolve null nem coordenadas nulas. */
+    private static List<Coordinate> bodyOf(Snake s) {
+        if (s == null) {
+            return Collections.emptyList();
+        }
+        List<Coordinate> out = new ArrayList<>();
+        if (s.getBody() != null) {
+            for (Coordinate c : s.getBody()) {
+                if (c != null) {
+                    out.add(c);
+                }
+            }
+        }
+        if (out.isEmpty() && s.getHead() != null) {
+            out.add(s.getHead());
+        }
+        return out;
+    }
+
+    /** Todas as cobras do tabuleiro, incluindo a minha mesmo que o JSON não a liste. */
+    private static List<Snake> allSnakes(GameState state) {
+        List<Snake> all = new ArrayList<>();
+        Snake me = state.getYou();
+        boolean listed = false;
+        if (state.getBoard() != null && state.getBoard().getSnakes() != null) {
+            for (Snake s : state.getBoard().getSnakes()) {
+                if (s == null) {
+                    continue;
+                }
+                all.add(s);
+                if (isMe(s, me)) {
+                    listed = true;
+                }
+            }
+        }
+        if (!listed && me != null) {
+            all.add(me);
+        }
+        return all;
+    }
+
+    /** Mesma cobra por referência, por id ou (sem id) por cabeça e tamanho idênticos. */
+    private static boolean isMe(Snake s, Snake me) {
+        if (s == me) {
+            return true;
+        }
+        if (s.getId() != null && me.getId() != null) {
+            return s.getId().equals(me.getId());
+        }
+        List<Coordinate> a = bodyOf(s);
+        List<Coordinate> b = bodyOf(me);
+        return !a.isEmpty() && a.size() == b.size() && sameCell(a.get(0), b.get(0));
     }
 
     private static boolean sameCell(Coordinate a, Coordinate b) {
