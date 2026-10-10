@@ -1,5 +1,56 @@
 package com.mauadev.code;
 
+// =============================================================================
+//  COMO ESTA COBRA PENSA  (v6: Java, baseada no logic.py v5.0.0 — leia antes de mexer no código)
+// =============================================================================
+//
+//  A cada turno o jogo manda o estado do tabuleiro e a cobra tem 500 ms para responder
+//  "up", "down", "left" ou "right". O caminho de getMove() é:
+//
+//   1. LER o tabuleiro ........ buildContext(): tamanho, regras (standard, royale, wrapped,
+//                               constrictor), hazards, comida, cobras. Nada é fixo em 11x11.
+//   2. TIRAR o suicídio ....... getPossibleMoves(): parede, corpos, casas que não liberam a tempo.
+//   3. ESCOLHER entre o resto:
+//        - 1 rival (1v1, o formato do campeonato) -> BUSCA minimax (classe Search, no fim deste arquivo).
+//        - 3+ cobras -> PONTUAÇÃO por componentes (seção "COMPONENTES DE PONTUAÇÃO").
+//   4. SE ALGO FALHAR ......... fallback seguro: nunca devolve erro, nem estoura o prazo.
+//
+//  REGRAS DO JOGO QUE O CÓDIGO RESPEITA
+//   - Movimento simultâneo: as cobras escolhem ao mesmo tempo. Logo não dá para "prever" o
+//     rival; planejamos para o PIOR caso dele (minimax).
+//   - Cabeça contra cabeça: a MENOR morre; de mesmo tamanho morrem as duas. Casa que cobra
+//     maior/igual alcança é perigosa; casa que só cobra menor alcança é uma chance de matar.
+//   - Cauda: sai do lugar no turno seguinte, então pisar nela é seguro, EXCETO se a cobra
+//     acabou de comer (cauda duplicada) ou pode comer agora.
+//   - Vida: -1 por turno, comida devolve 100 e cresce 1; hazard custa mais 14 por turno
+//     (royale). 'wrapped': as bordas dão a volta. 'constrictor': sem comida, todos crescem
+//     todo turno e a cauda nunca libera casa.
+//
+//  ESTRATÉGIAS (por que ela joga assim)
+//   - TERRITÓRIO (Voronoi): cada casa pertence a quem chega nela primeiro. Quem tem mais casas
+//     tem mais comida, mais saída e acaba encurralando o outro. É o núcleo da avaliação.
+//   - ENCURRALAR: a busca vê, a vários turnos de distância, jogadas que reduzem o território
+//     do rival até ele não ter saída, e evita as que fazem isso comigo.
+//   - TAMANHO: ser maior vence choques de cabeça e disputas de casa; por isso comer vale, mas
+//     só quando é seguro (comida disputada por cobra maior é ignorada).
+//   - FOME: se não dá para chegar à comida antes da vida acabar, a nota despenca. Com hazards
+//     o cálculo é em PONTOS DE VIDA (cada casa de hazard custa 1 + dano), não em passos.
+//   - SEGUIR A CAUDA: com o corpo grande, o caminho mais seguro costuma ser seguir a própria
+//     cauda: ela sempre abre espaço.
+//   - TEMPO: a jogada inteira termina em até 100 ms (MOVE_MAX_MS). A busca aprofunda de 1 em 1
+//     (iterative deepening) e para quando o prazo acaba (SEARCH_CAP_MS), então sempre há resposta.
+//     O prazo encolhe sozinho se a latência medida estiver alta.
+//
+//  TÉCNICAS (resumo)
+//   - Minimax com poda alfa-beta, aprofundamento iterativo e ordenação pelas notas clássicas.
+//   - Ordenação "killer": em cada nível da árvore, o lance que foi melhor da última vez é testado
+//     primeiro. Não muda a resposta, mas a poda corta muito mais cedo (quase metade dos nós).
+//   - Avaliação com BITBOARDS: o território (Voronoi) é calculado com operações de bits, várias
+//     casas por instrução. Resultado idêntico ao cálculo casa por casa, ~5x mais rápido.
+//   - Fim de jogo: vitória = +100000 - turno (quanto antes melhor); empate = 0; derrota = -(...).
+//   - Tudo que mexe em comportamento está em Weights / constantes TUNING / Search.W_* (no fim do arquivo).
+//
+//  Documentação do jogo: https://docs.battlesnake.com
 
 import com.mauadev.code.entities.Board;
 import com.mauadev.code.entities.Coordinate;
@@ -115,10 +166,10 @@ public class Logic {
         Map<String, String> info = new HashMap<>();
         info.put("apiversion", "1");
         info.put("author", "PedroAAmaral");          // TODO: coloque aqui o SEU usuário do Battlesnake
-        info.put("color", "#034e03e0");    // TODO: escolha a cor da sua cobra
+        info.put("color", "#034903e0");    // TODO: escolha a cor da sua cobra
         info.put("head", "tongue");  // TODO: escolha a cabeça
-        info.put("tail", "skinny");        // TODO: escolha a cauda
-        info.put("version", "6.1.0-java");
+        info.put("tail", "small-rattle");        // TODO: escolha a cauda
+        info.put("version", "6.0.0-java");
         return info;
     }
 
@@ -986,11 +1037,7 @@ public class Logic {
     static final class Search {
 
         static final int WIN = 100000;
-        // EMPATE (as duas cabeças batem com o mesmo tamanho): vale quase uma derrota.
-        // Antes era 0.0, o mesmo valor de uma posição equilibrada: quando a busca achava a posição
-        // um pouco ruim (nota negativa), bater de frente parecia "melhor" e a cobra aceitava o empate.
-        // Continua acima da derrota (-(WIN - ply)): se TODAS as jogadas perdem, o empate ainda é preferido.
-        static final double DRAW = -50000.0;
+        static final double DRAW = 0.0;
 
         // Pesos da avaliação da busca (1 ponto = 1 casa de território de vantagem).
         // Por segmento a mais que a rival: ser maior ganha os choques de cabeça e o território.
