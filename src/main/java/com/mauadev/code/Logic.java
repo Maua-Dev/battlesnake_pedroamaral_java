@@ -1,7 +1,6 @@
 package com.mauadev.code;
 
 
-
 import com.mauadev.code.entities.Board;
 import com.mauadev.code.entities.Coordinate;
 import com.mauadev.code.entities.Game;
@@ -116,10 +115,10 @@ public class Logic {
         Map<String, String> info = new HashMap<>();
         info.put("apiversion", "1");
         info.put("author", "PedroAAmaral");          // TODO: coloque aqui o SEU usuário do Battlesnake
-        info.put("color", "#046604e0");    // TODO: escolha a cor da sua cobra
+        info.put("color", "#034e03e0");    // TODO: escolha a cor da sua cobra
         info.put("head", "tongue");  // TODO: escolha a cabeça
-        info.put("tail", "small-rattle");        // TODO: escolha a cauda
-        info.put("version", "6.0.0-java");
+        info.put("tail", "skinny");        // TODO: escolha a cauda
+        info.put("version", "6.1.0-java");
         return info;
     }
 
@@ -987,7 +986,11 @@ public class Logic {
     static final class Search {
 
         static final int WIN = 100000;
-        static final double DRAW = 0.0;
+        // EMPATE (as duas cabeças batem com o mesmo tamanho): vale quase uma derrota.
+        // Antes era 0.0, o mesmo valor de uma posição equilibrada: quando a busca achava a posição
+        // um pouco ruim (nota negativa), bater de frente parecia "melhor" e a cobra aceitava o empate.
+        // Continua acima da derrota (-(WIN - ply)): se TODAS as jogadas perdem, o empate ainda é preferido.
+        static final double DRAW = -50000.0;
 
         // Pesos da avaliação da busca (1 ponto = 1 casa de território de vantagem).
         // Por segmento a mais que a rival: ser maior ganha os choques de cabeça e o território.
